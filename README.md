@@ -1,22 +1,59 @@
-# GitDeclutter
+# GitDeclutter — safe local Git branch cleanup
 
 **Know what's safe to delete before you delete it.**
 
-Safely identify and clean stale local Git branches.
+GitDeclutter (`git declutter`) is a command-line tool that finds stale local Git branches and classifies each one as **SAFE**, **REVIEW**, **KEEP**, or **PROTECTED** before you delete anything.
 
-A merged pull request does not always mean your current local branch contains no unique work. GitDeclutter combines local Git history, remote tracking state, and GitHub/GitLab pull request metadata to classify every local branch as **SAFE**, **REVIEW**, **KEEP**, or **PROTECTED** — and explains why.
+This is the official repository: https://github.com/kunmi02/git-declutter
+
+It is not the older Python project also named `git-declutter`. That tool turns a folder of copied files into a Git repo. This project is a Go CLI for safe branch cleanup.
+
+A merged pull request does not always mean your current local branch contains no unique work. GitDeclutter combines local Git history, remote tracking state, and GitHub/GitLab pull request metadata — and explains why.
+
+It checks for things like:
+
+- local-only commits
+- commits added after a PR was merged
+- diverged branches
+- deleted remote branches
+- active worktrees
+- protected branch patterns
+- incomplete or ambiguous merge state
+
+If GitDeclutter is not confident that a branch is safe to remove, it will not recommend automatic deletion.
+
+---
 
 ## Install
+
+### With Go
 
 ```bash
 go install github.com/kunmi02/git-declutter@latest
 ```
 
-After installation, Git exposes the binary as a subcommand:
+After installation, make sure your Go binary directory is on your `PATH`.
+
+Git automatically exposes `git-declutter` as a Git subcommand:
 
 ```bash
 git declutter scan
 ```
+
+### Prebuilt binaries
+
+Prebuilt binaries for macOS, Linux, and Windows are available from:
+
+https://github.com/kunmi02/git-declutter/releases
+
+Once `git-declutter` is available on your `PATH`, you can use:
+
+```bash
+git declutter version
+git declutter scan
+```
+
+---
 
 ## Example
 
@@ -58,13 +95,15 @@ PROTECTED                                         3
 12 safe · 3 review · 4 keep · 3 protected
 ```
 
+---
+
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `git declutter scan` | Analyze local branches. Never deletes anything. |
 | `git declutter why <branch>` | Explain one branch's classification. |
-| `git declutter clean` | Interactively remove SAFE branches (recoverable). |
+| `git declutter clean` | Interactively remove SAFE branches with recovery enabled. |
 | `git declutter clean --dry-run` | Preview cleanup with no changes. |
 | `git declutter clean --safe-only --yes` | Non-interactive SAFE cleanup. |
 | `git declutter clean --permanent` | Delete without GitDeclutter recovery refs. |
@@ -82,30 +121,142 @@ git declutter scan --refresh
 git declutter scan --branch feature/foo
 ```
 
-`--refresh` runs `git fetch --prune` and prints `Refreshing remote references...`. Default scans do not prune remotes.
+`--refresh` runs:
+
+```bash
+git fetch --prune
+```
+
+and prints:
+
+```text
+Refreshing remote references...
+```
+
+Default scans do not prune remote-tracking references.
+
+---
 
 ## Safety model
+
+GitDeclutter is designed around one principle:
+
+> **Safety analysis first. Cleanup second.**
 
 | Status | Meaning |
 | --- | --- |
 | **SAFE** | Strong evidence that deleting the local branch will not lose unique work. Eligible for automatic cleanup. |
-| **REVIEW** | Stale-looking, but evidence is incomplete. Never selected automatically. |
-| **KEEP** | Evidence of active or unique work. Never automatically deleted. |
-| **PROTECTED** | Current branch, default branch, worktree branch, or a configured pattern. |
+| **REVIEW** | The branch looks stale, but available evidence is incomplete or ambiguous. Never selected automatically. |
+| **KEEP** | Evidence suggests active or unique work exists. Never automatically deleted. |
+| **PROTECTED** | Current branch, default branch, worktree branch, or a configured protected pattern. |
 
-False negatives are acceptable. False positives are not. If GitDeclutter is uncertain, it will not recommend automatic deletion.
+False negatives are acceptable.
 
-A merged PR alone does **not** make a branch SAFE. GitDeclutter also checks whether local commits were added after the PR, whether the branch diverged, whether unique commits exist only locally, and whether the branch is in use by a worktree.
+False positives are not.
+
+If GitDeclutter is uncertain, it chooses the safer classification.
+
+A merged PR alone does **not** automatically make a branch SAFE.
+
+For example:
+
+```text
+PR merged at C
+
+A──B──C
+
+Local branch later becomes:
+
+A──B──C──D──E
+```
+
+Even though the PR was merged, commits `D` and `E` may only exist locally.
+
+GitDeclutter detects situations like this before recommending cleanup.
+
+---
+
+## How branch analysis works
+
+GitDeclutter uses multiple signals rather than relying only on:
+
+```bash
+git branch --merged
+```
+
+Depending on the repository and provider, it can consider:
+
+- whether the branch is fully merged into the default branch
+- whether a GitHub pull request or GitLab merge request was merged
+- the PR/MR head commit
+- whether local HEAD moved after the PR was merged
+- whether local commits exist only on the machine
+- whether the branch diverged from its previously merged state
+- whether the remote branch still exists
+- whether the branch is currently checked out
+- whether another Git worktree is using the branch
+- whether the branch matches configured protection rules
+
+Provider failures or missing metadata are never treated as positive evidence that deletion is safe.
+
+---
+
+## Explain a decision
+
+Use `why` to inspect exactly how GitDeclutter classified a branch:
+
+```bash
+git declutter why feature/payments
+```
+
+Example:
+
+```text
+feature/payments
+
+Status: KEEP
+
+✓ Pull request was merged
+✓ Remote branch was deleted
+⚠ Local branch contains commits added after the merged PR
+⚠ 2 commits exist only locally
+
+Recommendation: KEEP
+```
+
+The goal is that every recommendation is explainable rather than being a simple "delete / don't delete" decision.
+
+---
 
 ## Recovery
 
-Normal cleanup preserves deleted branch tips for **30 days**:
+Normal cleanup is recoverable by default.
+
+Before deleting a local branch, GitDeclutter preserves its commit using a hidden Git reference:
 
 ```text
 refs/git-declutter/recovery/<event-id>/<branch>
 ```
 
-Restore with `git declutter restore`. Permanent deletion (`--permanent` / `--hard`) creates no GitDeclutter undo. Git itself may still retain unreachable objects via reflog and garbage collection; GitDeclutter does not claim physical object deletion.
+The default retention period is:
+
+```text
+30 days
+```
+
+During that period, you can restore the branch:
+
+```bash
+git declutter restore feature/login
+```
+
+You can also inspect previous cleanup operations:
+
+```bash
+git declutter history
+```
+
+### Configure retention
 
 ```bash
 git declutter config set recovery.retention 7d
@@ -114,38 +265,296 @@ git declutter config set recovery.retention 90d
 git declutter config set recovery.retention forever
 ```
 
+### Permanent deletion
+
+```bash
+git declutter clean --permanent
+```
+
+or:
+
+```bash
+git declutter clean --hard
+```
+
+Permanent deletion creates no GitDeclutter recovery reference.
+
+Git itself may still retain unreachable objects through reflogs and normal garbage collection behavior. GitDeclutter does not claim to physically erase Git objects from the repository.
+
+---
+
+## Cleanup safety
+
+GitDeclutter revalidates branches immediately before deletion.
+
+If a branch changes after it was analyzed, it will be skipped instead of being deleted.
+
+For example:
+
+```text
+Skipping feature/payments:
+branch changed since it was analyzed.
+```
+
+Branches classified as:
+
+```text
+REVIEW
+KEEP
+PROTECTED
+```
+
+are never automatically deleted.
+
+Only **SAFE** branches are eligible for automatic cleanup.
+
+---
+
 ## Configuration
 
-Global config lives in the OS config directory (`~/Library/Application Support/git-declutter/` on macOS, `~/.config/git-declutter/` on Linux).
+Global configuration is stored in the operating system's standard configuration directory.
 
-Optional repository file:
+Examples:
+
+```text
+macOS:
+~/Library/Application Support/git-declutter/
+
+Linux:
+~/.config/git-declutter/
+```
+
+You can also define repository-specific configuration using:
+
+```text
+.gitdeclutter.yml
+```
+
+Example:
 
 ```yaml
-# .gitdeclutter.yml
 version: 1
+
 protected:
   - main
   - develop
   - release/*
   - production
+
 recovery:
   enabled: true
   retention: 30d
+
 cleanup:
   requireRemoteDeleted: true
 ```
 
-Default protected patterns: `main`, `master`, `develop`, `development`, `release/*`, `production`, `prod`.
+Default protected patterns include:
+
+```text
+main
+master
+develop
+development
+release/*
+production
+prod
+```
+
+---
+
+## GitHub and GitLab
+
+GitDeclutter can enrich local Git analysis using pull request or merge request metadata.
+
+Supported authentication methods include existing developer tooling and environment variables.
+
+### GitHub
+
+```text
+gh
+GITHUB_TOKEN
+```
+
+### GitLab
+
+```text
+glab
+GITLAB_TOKEN
+```
+
+GitDeclutter does not copy provider tokens into its own configuration.
+
+---
+
+## Offline mode
+
+GitDeclutter can operate without contacting GitHub or GitLab:
+
+```bash
+git declutter scan --offline
+```
+
+Offline mode relies only on local Git information such as:
+
+- refs
+- commit ancestry
+- remote-tracking branches
+- worktree state
+- configuration
+
+If Git alone cannot prove that a branch is safe, the branch may be classified as **REVIEW**.
+
+---
+
+## JSON output
+
+GitDeclutter can produce machine-readable output:
+
+```bash
+git declutter scan --json
+```
+
+This can be used for:
+
+- scripts
+- automation
+- editor integrations
+- future desktop or IDE interfaces
+
+Example:
+
+```json
+{
+  "repository": {
+    "defaultBranch": "main",
+    "provider": "github"
+  },
+  "summary": {
+    "safe": 12,
+    "review": 3,
+    "keep": 4,
+    "protected": 3
+  }
+}
+```
+
+---
 
 ## Privacy
 
-GitDeclutter is local-first. It does not require an account and does not upload repository contents, source, diffs, or commit messages to GitDeclutter-owned infrastructure.
+GitDeclutter is local-first.
 
-Provider APIs are contacted only to fetch repository metadata (owner, name, branch names, commit SHAs, pull request state). Authentication uses existing `gh` / `GITHUB_TOKEN` or `glab` / `GITLAB_TOKEN` and is never copied into GitDeclutter config. There is no telemetry.
+It does not require a GitDeclutter account.
+
+It does not upload:
+
+- repository source code
+- file contents
+- patches
+- diffs
+- commit messages
+
+to GitDeclutter-owned infrastructure.
+
+Provider APIs are contacted only when necessary to retrieve repository metadata such as:
+
+- repository owner/name
+- branch names
+- commit SHAs
+- pull request state
+
+There is currently **no telemetry**.
+
+---
+
+## Supported platforms
+
+GitDeclutter is designed to run on:
+
+- macOS
+- Linux
+- Windows
+
+Prebuilt binaries are published through GitHub Releases.
+
+---
 
 ## Development
 
+Clone the official repository:
+
+```bash
+git clone https://github.com/kunmi02/git-declutter.git
+cd git-declutter
+```
+
+Run tests:
+
 ```bash
 make test
+```
+
+Build locally:
+
+```bash
 make build
 ```
+
+---
+
+## Project philosophy
+
+There are already many ways to delete Git branches.
+
+GitDeclutter is not trying to make:
+
+```bash
+git branch -D
+```
+
+easier.
+
+The goal is to make the decision **before** deletion safer.
+
+The core product promise is:
+
+> **Know what's safe to delete before you delete it.**
+
+---
+
+## FAQ
+
+### How do I delete merged Git branches safely?
+
+Run `git declutter scan` first. It never deletes anything. Only branches classified **SAFE** are eligible for `git declutter clean`. **REVIEW**, **KEEP**, and **PROTECTED** branches are never deleted automatically.
+
+### Does a merged pull request mean the local branch is safe to delete?
+
+No. Commits added after the PR merged, or commits that exist only on your machine, can still be unique local work. GitDeclutter checks for that before recommending cleanup.
+
+### Is this the same as the Python `git-declutter` project?
+
+No. [dustmop/git-declutter](https://github.com/dustmop/git-declutter) rebuilds a tidy repo from copied files. This repository is the Go CLI `git declutter` for stale local branch cleanup.
+
+### Where is the official GitDeclutter repository?
+
+**https://github.com/kunmi02/git-declutter**
+
+Install from that module path only:
+
+```bash
+go install github.com/kunmi02/git-declutter@latest
+```
+
+---
+
+## Official project
+
+GitDeclutter is developed and maintained from the canonical repository:
+
+**https://github.com/kunmi02/git-declutter**
+
+If you find GitDeclutter useful, consider giving the repository a ⭐ **star**.
+
+If you want to experiment with the project or contribute improvements, feel free to 🍴 **fork** the repository and open a pull request.

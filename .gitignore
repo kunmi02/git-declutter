@@ -2,6 +2,7 @@
 /git-declutter
 /git-declutter.exe
 /git-declutter-*
+/dist/
 
 # Tests / coverage
 /coverage.out
