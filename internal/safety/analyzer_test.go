@@ -223,13 +223,60 @@ func TestAnalyzer_GitMergeAndRemote(t *testing.T) {
 		}
 	})
 
-	t.Run("remote deleted unknown merge state is REVIEW", func(t *testing.T) {
+	t.Run("reachable from another remote and remote deleted is SAFE", func(t *testing.T) {
 		got := a.Analyze(BranchContext{
-			Name: "experiment/cache", LocalSHA: "abc",
+			Name: "feat/into-develop", LocalSHA: "abc",
 			RemoteState: RemoteDeleted, IsMergedToTrunk: false,
 			DefaultKnown: true, DefaultBranch: "main",
 		})
+		if got.Status != StatusSafe {
+			t.Fatalf("status=%s reasons=%v", got.Status, got.Reasons)
+		}
+		if !got.HasReason(ReasonMergedIntoRemote) {
+			t.Fatalf("reasons=%v", got.Reasons)
+		}
+	})
+
+	t.Run("reachable from another remote but feature remote still exists is REVIEW", func(t *testing.T) {
+		got := a.Analyze(BranchContext{
+			Name: "feat/into-develop", LocalSHA: "abc",
+			RemoteState: RemoteExists, IsMergedToTrunk: false,
+			DefaultKnown: true, DefaultBranch: "main",
+		})
 		if got.Status != StatusReview {
+			t.Fatalf("status=%s reasons=%v", got.Status, got.Reasons)
+		}
+	})
+
+	t.Run("abandoned after remote delete matching last push is SAFE", func(t *testing.T) {
+		got := a.Analyze(BranchContext{
+			Name: "feat/try-out", LocalSHA: "pushedsha",
+			RemoteState:        RemoteDeleted,
+			IsMergedToTrunk:    false,
+			LocalOnlyCommits:   []Commit{{SHA: "pushedsha"}},
+			LastKnownRemoteSHA: "pushedsha",
+			DefaultKnown:       true,
+			DefaultBranch:      "main",
+		})
+		if got.Status != StatusSafe {
+			t.Fatalf("status=%s reasons=%v", got.Status, got.Reasons)
+		}
+		if !got.HasReason(ReasonAbandonedRemoteDeleted) {
+			t.Fatalf("reasons=%v", got.Reasons)
+		}
+	})
+
+	t.Run("local commits after last remote SHA stay KEEP", func(t *testing.T) {
+		got := a.Analyze(BranchContext{
+			Name: "feat/try-out", LocalSHA: "newer",
+			RemoteState:        RemoteDeleted,
+			IsMergedToTrunk:    false,
+			LocalOnlyCommits:   []Commit{{SHA: "pushedsha"}, {SHA: "newer"}},
+			LastKnownRemoteSHA: "pushedsha",
+			DefaultKnown:       true,
+			DefaultBranch:      "main",
+		})
+		if got.Status != StatusKeep {
 			t.Fatalf("status=%s reasons=%v", got.Status, got.Reasons)
 		}
 	})

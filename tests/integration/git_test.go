@@ -349,3 +349,54 @@ func TestNotAGitRepository(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestAbandonedAfterRemoteDeleteIsSafe(t *testing.T) {
+	h := newHarness(t)
+	h.git(h.local, "checkout", "-b", "feat/try-out")
+	h.write("try.go", "package try\n")
+	h.git(h.local, "add", "try.go")
+	h.git(h.local, "commit", "-m", "try")
+	h.git(h.local, "push", "-u", "origin", "feat/try-out")
+	h.git(h.local, "checkout", "main")
+	// Delete on the remote only, like the GitHub UI. Local origin/* still exists until prune.
+	h.git(h.remote, "branch", "-D", "feat/try-out")
+
+	cfg := config.Defaults()
+	res, err := engine.Scan(context.Background(), h.repo(t), cfg, engine.ScanOptions{Offline: true, Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := engine.FindAnalysis(res, "feat/try-out")
+	if !ok || a.Status != safety.StatusSafe {
+		t.Fatalf("expected SAFE abandoned branch, got %+v", a)
+	}
+	if !a.HasReason(safety.ReasonAbandonedRemoteDeleted) {
+		t.Fatalf("expected abandoned_remote_deleted, got %v", a.Reasons)
+	}
+}
+
+func TestMergedIntoNonDefaultRemoteIsSafe(t *testing.T) {
+	h := newHarness(t)
+	h.git(h.local, "checkout", "-b", "develop")
+	h.git(h.local, "push", "-u", "origin", "develop")
+	h.git(h.local, "checkout", "-b", "feat/into-develop")
+	h.write("child.go", "package child\n")
+	h.git(h.local, "add", "child.go")
+	h.git(h.local, "commit", "-m", "child")
+	h.git(h.local, "push", "-u", "origin", "feat/into-develop")
+	h.git(h.local, "checkout", "develop")
+	h.git(h.local, "merge", "--no-ff", "feat/into-develop", "-m", "merge child")
+	h.git(h.local, "push", "origin", "develop")
+	h.git(h.local, "push", "origin", "--delete", "feat/into-develop")
+	h.git(h.local, "checkout", "main")
+	h.git(h.local, "fetch", "--prune")
+
+	res := h.scanOffline(t)
+	a, ok := engine.FindAnalysis(res, "feat/into-develop")
+	if !ok || a.Status != safety.StatusSafe {
+		t.Fatalf("expected SAFE when merged into develop, got %+v", a)
+	}
+	if a.HasReason(safety.ReasonMergedIntoTrunk) {
+		t.Fatal("should not be classified as merged into main")
+	}
+}

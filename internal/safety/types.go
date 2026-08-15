@@ -49,26 +49,27 @@ type PullRequest struct {
 }
 
 type BranchContext struct {
-	Name             string
-	LocalSHA         string
-	Upstream         string
-	RemoteName       string
-	RemoteState      RemoteState
-	IsCurrent        bool
-	InWorktree       bool
-	IsProtected      bool
-	ProtectedPattern string
-	IsDefault        bool
-	IsMergedToTrunk  bool
-	DefaultKnown     bool
-	DefaultBranch    string
-	LocalOnlyCommits []Commit
-	PullRequests     []PullRequest
-	MergedPR         *PullRequest
-	PRHeadRelation   HeadRelation
-	ProviderError    string
-	Offline          bool
-	AnalyzedAt       time.Time
+	Name               string
+	LocalSHA           string
+	Upstream           string
+	RemoteName         string
+	RemoteState        RemoteState
+	IsCurrent          bool
+	InWorktree         bool
+	IsProtected        bool
+	ProtectedPattern   string
+	IsDefault          bool
+	IsMergedToTrunk    bool
+	DefaultKnown       bool
+	DefaultBranch      string
+	LocalOnlyCommits   []Commit
+	LastKnownRemoteSHA string
+	PullRequests       []PullRequest
+	MergedPR           *PullRequest
+	PRHeadRelation     HeadRelation
+	ProviderError      string
+	Offline            bool
+	AnalyzedAt         time.Time
 }
 
 type Evidence struct {
@@ -76,6 +77,7 @@ type Evidence struct {
 	DefaultBranch       string       `json:"defaultBranch,omitempty"`
 	RemoteState         RemoteState  `json:"remoteState"`
 	MergedIntoTrunk     bool         `json:"mergedIntoTrunk"`
+	LastKnownRemoteSHA  string       `json:"lastKnownRemoteSha,omitempty"`
 	LocalOnlyCommitSHAs []string     `json:"localOnlyCommitShas,omitempty"`
 	PullRequest         *PullRequest `json:"pullRequest,omitempty"`
 	PRHeadRelation      HeadRelation `json:"prHeadRelation,omitempty"`

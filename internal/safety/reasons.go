@@ -9,7 +9,10 @@ const (
 	ReasonBranchInWorktree          Reason = "branch_in_worktree"
 	ReasonBranchMatchesProtected    Reason = "branch_matches_protected_pattern"
 	ReasonMergedIntoTrunk           Reason = "merged_into_trunk"
+	ReasonMergedIntoRemote          Reason = "merged_into_remote"
 	ReasonNotMergedIntoTrunk        Reason = "not_merged_into_trunk"
+	ReasonAbandonedRemoteDeleted    Reason = "abandoned_remote_deleted"
+	ReasonLocalMatchesLastRemote    Reason = "local_matches_last_remote"
 	ReasonRemoteBranchDeleted       Reason = "remote_branch_deleted"
 	ReasonRemoteBranchExists        Reason = "remote_branch_exists"
 	ReasonRemoteStateUnknown        Reason = "remote_state_unknown"
@@ -43,12 +46,15 @@ type ReasonDetail struct {
 func (r Reason) Positive() bool {
 	switch r {
 	case ReasonMergedIntoTrunk,
+		ReasonMergedIntoRemote,
 		ReasonRemoteBranchDeleted,
 		ReasonPullRequestMerged,
 		ReasonLocalHeadMatchesPR,
 		ReasonLocalHeadBehindPR,
 		ReasonNoLocalOnlyCommits,
-		ReasonSquashMerged:
+		ReasonSquashMerged,
+		ReasonAbandonedRemoteDeleted,
+		ReasonLocalMatchesLastRemote:
 		return true
 	default:
 		return false

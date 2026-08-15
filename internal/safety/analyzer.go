@@ -21,13 +21,14 @@ func (a Analyzer) Analyze(ctx BranchContext) BranchAnalysis {
 		SHA:        ctx.LocalSHA,
 		AnalyzedAt: ctx.AnalyzedAt,
 		Evidence: Evidence{
-			LocalSHA:        ctx.LocalSHA,
-			DefaultBranch:   ctx.DefaultBranch,
-			RemoteState:     ctx.RemoteState,
-			MergedIntoTrunk: ctx.IsMergedToTrunk,
-			Worktree:        ctx.InWorktree,
-			Protected:       ctx.IsProtected || ctx.IsCurrent || ctx.IsDefault || ctx.InWorktree,
-			PRHeadRelation:  ctx.PRHeadRelation,
+			LocalSHA:           ctx.LocalSHA,
+			DefaultBranch:      ctx.DefaultBranch,
+			RemoteState:        ctx.RemoteState,
+			MergedIntoTrunk:    ctx.IsMergedToTrunk,
+			LastKnownRemoteSHA: ctx.LastKnownRemoteSHA,
+			Worktree:           ctx.InWorktree,
+			Protected:          ctx.IsProtected || ctx.IsCurrent || ctx.IsDefault || ctx.InWorktree,
+			PRHeadRelation:     ctx.PRHeadRelation,
 		},
 	}
 	if len(ctx.LocalOnlyCommits) > 0 {
@@ -166,12 +167,11 @@ func (a Analyzer) evaluateGitOnly(ctx BranchContext) evalResult {
 	}
 	reasons = appendRemoteReason(reasons, ctx)
 
-	if !ctx.DefaultKnown {
-		reasons = append(reasons, ReasonDefaultBranchUnknown, ReasonInsufficientEvidence)
-		return review(50, reasons, nil)
-	}
-
 	if ctx.IsMergedToTrunk {
+		if !ctx.DefaultKnown {
+			reasons = append(reasons, ReasonDefaultBranchUnknown, ReasonInsufficientEvidence)
+			return review(50, reasons, nil)
+		}
 		reasons = append(reasons, ReasonMergedIntoTrunk)
 		if len(ctx.LocalOnlyCommits) == 0 {
 			reasons = append(reasons, ReasonNoLocalOnlyCommits)
@@ -182,29 +182,39 @@ func (a Analyzer) evaluateGitOnly(ctx BranchContext) evalResult {
 		}}))
 	}
 
-	reasons = append(reasons, ReasonNotMergedIntoTrunk)
-
-	if len(ctx.LocalOnlyCommits) > 0 {
-		reasons = append(reasons, ReasonLocalOnlyCommits)
-		if ctx.RemoteState == RemoteDeleted {
-			return keep(90, reasons, []ReasonDetail{{
-				Code:    ReasonLocalOnlyCommits,
-				Message: fmt.Sprintf("%d commit(s) are not reachable from any remote", len(ctx.LocalOnlyCommits)),
-			}})
-		}
-		return keep(85, reasons, nil)
+	if ctx.DefaultKnown {
+		reasons = append(reasons, ReasonNotMergedIntoTrunk)
 	}
 
-	if ctx.RemoteState == RemoteDeleted {
-		reasons = append(reasons, ReasonInsufficientEvidence)
-		return review(60, reasons, []ReasonDetail{{
-			Code:    ReasonRemoteBranchDeleted,
-			Message: "Remote branch deleted and merge state could not be proven",
+	if !ctx.DefaultKnown && len(ctx.LocalOnlyCommits) > 0 && !(ctx.RemoteState == RemoteDeleted && ctx.LastKnownRemoteSHA != "" && ctx.LastKnownRemoteSHA == ctx.LocalSHA) {
+		reasons = append(reasons, ReasonDefaultBranchUnknown, ReasonInsufficientEvidence)
+		return review(50, reasons, nil)
+	}
+
+	if len(ctx.LocalOnlyCommits) == 0 {
+		reasons = append(reasons, ReasonNoLocalOnlyCommits, ReasonMergedIntoRemote)
+		return a.maybeRemoteGate(ctx, safe(90, reasons, []ReasonDetail{{
+			Code:    ReasonMergedIntoRemote,
+			Message: "All commits are reachable from another remote branch",
+		}}))
+	}
+
+	if ctx.RemoteState == RemoteDeleted && ctx.LastKnownRemoteSHA != "" && ctx.LastKnownRemoteSHA == ctx.LocalSHA {
+		reasons = append(reasons, ReasonAbandonedRemoteDeleted, ReasonLocalMatchesLastRemote)
+		return safe(90, reasons, []ReasonDetail{{
+			Code:    ReasonAbandonedRemoteDeleted,
+			Message: "Remote branch was deleted and local HEAD still matches the last pushed SHA",
 		}})
 	}
 
-	reasons = append(reasons, ReasonInsufficientEvidence)
-	return review(50, reasons, nil)
+	reasons = append(reasons, ReasonLocalOnlyCommits)
+	if ctx.RemoteState == RemoteDeleted {
+		return keep(90, reasons, []ReasonDetail{{
+			Code:    ReasonLocalOnlyCommits,
+			Message: fmt.Sprintf("%d commit(s) are not reachable from any remote", len(ctx.LocalOnlyCommits)),
+		}})
+	}
+	return keep(85, reasons, nil)
 }
 
 func (a Analyzer) maybeRemoteGate(ctx BranchContext, candidate evalResult) evalResult {
@@ -351,6 +361,12 @@ func summarize(a BranchAnalysis, ctx BranchContext) string {
 	}
 	if a.HasReason(ReasonMergedIntoTrunk) && ctx.DefaultBranch != "" && !a.HasReason(ReasonPullRequestMerged) {
 		parts = append(parts, fmt.Sprintf("Fully merged into %s", ctx.DefaultBranch))
+	}
+	if a.HasReason(ReasonMergedIntoRemote) && !a.HasReason(ReasonMergedIntoTrunk) {
+		parts = append(parts, "reachable from another remote")
+	}
+	if a.HasReason(ReasonAbandonedRemoteDeleted) {
+		parts = append(parts, "abandoned after remote delete")
 	}
 	if a.HasReason(ReasonRemoteBranchDeleted) {
 		parts = append(parts, "remote deleted")

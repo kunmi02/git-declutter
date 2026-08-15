@@ -50,6 +50,28 @@ func (r *Repo) LocalOnlyCommits(ctx context.Context, branch string) ([]safety.Co
 	return parseRevList(out), nil
 }
 
+// LastKnownRemoteSHA is the current remote-tracking SHA, or the latest
+// reflog entry after that ref was pruned (so we can still see the last push).
+func (r *Repo) LastKnownRemoteSHA(ctx context.Context, remote, branch string) (string, error) {
+	if sha, err := r.RemoteTrackingSHA(ctx, remote, branch); err != nil {
+		return "", err
+	} else if sha != "" {
+		return sha, nil
+	}
+	if remote == "" {
+		remote = "origin"
+	}
+	ref := "refs/remotes/" + remote + "/" + branch
+	out, code, err := r.runner.GitAllowFail(ctx, "reflog", "-n", "1", "--format=%H", ref)
+	if err != nil {
+		return "", err
+	}
+	if code != 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(out), nil
+}
+
 func (r *Repo) CommitsNotIn(ctx context.Context, branch, other string) ([]safety.Commit, error) {
 	out, err := r.runner.Git(ctx, "rev-list", "--pretty=format:%s", other+".."+branch)
 	if err != nil {

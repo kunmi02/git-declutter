@@ -51,15 +51,26 @@ func Scan(ctx context.Context, repo *git.Repo, cfg config.Config, opts ScanOptio
 	store := recovery.Store{Repo: repo}
 	_, _ = store.CleanupExpired(ctx)
 
+	branches, err := repo.Branches(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	remote, _ := repo.PrimaryRemote(ctx)
+	remoteHeads := loadRemoteHeads(ctx, repo)
+	for name, sha := range snapshotTrackingHeads(ctx, repo, branches, remote.Name) {
+		remoteHeads[name] = sha
+	}
+	_ = saveRemoteHeads(ctx, repo, remoteHeads)
+
 	if opts.Refresh {
 		if err := repo.FetchPrune(ctx); err != nil {
 			return nil, fmt.Errorf("refresh remotes: %w", err)
 		}
-	}
-
-	branches, err := repo.Branches(ctx)
-	if err != nil {
-		return nil, err
+		branches, err = repo.Branches(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if opts.Branch != "" {
 		filtered := branches[:0]
@@ -81,7 +92,6 @@ func Scan(ctx context.Context, repo *git.Repo, cfg config.Config, opts ScanOptio
 	inWorktree := git.WorktreeBranches(trees)
 	current, _ := repo.CurrentBranch(ctx)
 
-	remote, _ := repo.PrimaryRemote(ctx)
 	parsed, _ := git.ParseRemoteURL(remote.URL)
 
 	defaultBranch, defaultKnown := detectDefault(ctx, repo, remote.Name, nil)
@@ -143,7 +153,7 @@ func Scan(ctx context.Context, repo *git.Repo, cfg config.Config, opts ScanOptio
 	analyses := make([]safety.BranchAnalysis, 0, len(branches))
 
 	for _, b := range branches {
-		bctx, err := buildContext(ctx, repo, cfg, b, current, inWorktree, defaultBranch, defaultKnown, remote.Name, prsByBranch, provider, opts.Offline, now)
+		bctx, err := buildContext(ctx, repo, cfg, b, current, inWorktree, defaultBranch, defaultKnown, remote.Name, remoteHeads, prsByBranch, provider, opts.Offline, now)
 		if err != nil {
 			return nil, err
 		}
@@ -193,6 +203,7 @@ func buildContext(
 	defaultBranch string,
 	defaultKnown bool,
 	remoteName string,
+	remoteHeads map[string]string,
 	prsByBranch map[string][]safety.PullRequest,
 	_ providers.Provider,
 	offline bool,
@@ -214,6 +225,18 @@ func buildContext(
 		localOnly = nil
 	}
 
+	remote := b.RemoteName
+	if remote == "" {
+		remote = remoteName
+	}
+	lastRemoteSHA := ""
+	if remoteHeads != nil {
+		lastRemoteSHA = remoteHeads[b.Name]
+	}
+	if lastRemoteSHA == "" {
+		lastRemoteSHA, _ = repo.LastKnownRemoteSHA(ctx, remote, b.Name)
+	}
+
 	remoteState := safety.RemoteUnknown
 	if b.Upstream != "" {
 		sha, err := repo.RemoteTrackingSHA(ctx, b.RemoteName, strings.TrimPrefix(b.Upstream, b.RemoteName+"/"))
@@ -226,6 +249,8 @@ func buildContext(
 		sha, err := repo.RemoteTrackingSHA(ctx, remoteName, b.Name)
 		if err == nil && sha != "" {
 			remoteState = safety.RemoteExists
+		} else if lastRemoteSHA != "" {
+			remoteState = safety.RemoteDeleted
 		} else {
 			remoteState = safety.RemoteUnknown
 		}
@@ -242,25 +267,26 @@ func buildContext(
 	}
 
 	return safety.BranchContext{
-		Name:             b.Name,
-		LocalSHA:         b.SHA,
-		Upstream:         b.Upstream,
-		RemoteName:       b.RemoteName,
-		RemoteState:      remoteState,
-		IsCurrent:        current != "" && b.Name == current,
-		InWorktree:       inWorktree[b.Name] && b.Name != current,
-		IsProtected:      protected && !isDefault,
-		ProtectedPattern: pattern,
-		IsDefault:        isDefault,
-		IsMergedToTrunk:  merged,
-		DefaultKnown:     defaultKnown,
-		DefaultBranch:    defaultBranch,
-		LocalOnlyCommits: localOnly,
-		PullRequests:     prs,
-		MergedPR:         mergedPR,
-		PRHeadRelation:   rel,
-		Offline:          offline,
-		AnalyzedAt:       now,
+		Name:               b.Name,
+		LocalSHA:           b.SHA,
+		Upstream:           b.Upstream,
+		RemoteName:         b.RemoteName,
+		RemoteState:        remoteState,
+		IsCurrent:          current != "" && b.Name == current,
+		InWorktree:         inWorktree[b.Name] && b.Name != current,
+		IsProtected:        protected && !isDefault,
+		ProtectedPattern:   pattern,
+		IsDefault:          isDefault,
+		IsMergedToTrunk:    merged,
+		DefaultKnown:       defaultKnown,
+		DefaultBranch:      defaultBranch,
+		LocalOnlyCommits:   localOnly,
+		LastKnownRemoteSHA: lastRemoteSHA,
+		PullRequests:       prs,
+		MergedPR:           mergedPR,
+		PRHeadRelation:     rel,
+		Offline:            offline,
+		AnalyzedAt:         now,
 	}, nil
 }
 
@@ -370,6 +396,61 @@ func cacheDir(ctx context.Context, repo *git.Repo) (string, error) {
 func cacheFileName(remote git.RemoteProvider) string {
 	safe := strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(remote.Host + "_" + remote.Owner + "_" + remote.Repo)
 	return safe + "-prs.json"
+}
+
+type remoteHeadCache struct {
+	Heads map[string]string `json:"heads"`
+}
+
+func snapshotTrackingHeads(ctx context.Context, repo *git.Repo, branches []git.Branch, remoteName string) map[string]string {
+	out := make(map[string]string, len(branches))
+	for _, b := range branches {
+		remote := b.RemoteName
+		if remote == "" {
+			remote = remoteName
+		}
+		name := b.Name
+		if b.Upstream != "" && remote != "" {
+			name = strings.TrimPrefix(b.Upstream, remote+"/")
+		}
+		sha, err := repo.RemoteTrackingSHA(ctx, remote, name)
+		if err != nil || sha == "" {
+			continue
+		}
+		out[b.Name] = sha
+	}
+	return out
+}
+
+func loadRemoteHeads(ctx context.Context, repo *git.Repo) map[string]string {
+	dir, err := cacheDir(ctx, repo)
+	if err != nil {
+		return map[string]string{}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "remote-heads.json"))
+	if err != nil {
+		return map[string]string{}
+	}
+	var c remoteHeadCache
+	if err := json.Unmarshal(data, &c); err != nil || c.Heads == nil {
+		return map[string]string{}
+	}
+	return c.Heads
+}
+
+func saveRemoteHeads(ctx context.Context, repo *git.Repo, heads map[string]string) error {
+	dir, err := cacheDir(ctx, repo)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.Marshal(remoteHeadCache{Heads: heads})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "remote-heads.json"), data, 0o644)
 }
 
 func FindAnalysis(result *ScanResult, name string) (safety.BranchAnalysis, bool) {

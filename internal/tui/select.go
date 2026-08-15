@@ -37,15 +37,19 @@ func Confirm(in io.Reader, out io.Writer, prompt string, defaultYes bool) (bool,
 
 func SelectSafeBranches(in io.Reader, out io.Writer, analyses []safety.BranchAnalysis, retention string) ([]safety.BranchAnalysis, error) {
 	var selected []safety.BranchAnalysis
-	fmt.Fprintln(out, "Select branches to remove")
-	fmt.Fprintln(out)
 	for _, a := range analyses {
-		mark := "[ ]"
 		if a.Status == safety.StatusSafe {
-			mark = "[x]"
 			selected = append(selected, a)
 		}
-		fmt.Fprintf(out, "%s %-32s %s\n", mark, a.Branch, a.Summary)
+	}
+	if len(selected) == 0 {
+		return []safety.BranchAnalysis{}, nil
+	}
+
+	fmt.Fprintln(out, "Selected branches to delete")
+	fmt.Fprintln(out)
+	for _, a := range selected {
+		fmt.Fprintf(out, "[x] %-32s %s\n", a.Branch, a.Summary)
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "%d branches selected\n\n", len(selected))

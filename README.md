@@ -26,34 +26,41 @@ If GitDeclutter is not confident that a branch is safe to remove, it will not re
 
 ## Install
 
+GitDeclutter is a compiled binary. You need **Git** to run it. You do **not** need Go after it is installed.
+
+Put `git-declutter` on your `PATH`. Git then exposes it as a subcommand:
+
+```bash
+git declutter scan
+```
+
 ### With Go
+
+Requires [Go](https://go.dev/dl/) 1.25+:
 
 ```bash
 go install github.com/kunmi02/git-declutter@latest
 ```
 
-After installation, make sure your Go binary directory is on your `PATH`.
+`GOBIN` (or `$(go env GOPATH)/bin`) must be on your `PATH`. Without Go, this command fails with `command not found: go`.
 
-Git automatically exposes `git-declutter` as a Git subcommand:
+### Without Go
 
-```bash
-git declutter scan
-```
+Download a prebuilt archive for your OS and CPU from [GitHub Releases](https://github.com/kunmi02/git-declutter/releases), then put `git-declutter` on your `PATH`.
 
-### Prebuilt binaries
-
-Prebuilt binaries for macOS, Linux, and Windows are available from:
-
-https://github.com/kunmi02/git-declutter/releases
-
-Once `git-declutter` is available on your `PATH`, you can use:
+macOS / Linux:
 
 ```bash
+tar -xzf git-declutter_*_darwin_arm64.tar.gz   # or linux_amd64, darwin_amd64, …
+sudo mv git-declutter /usr/local/bin/
 git declutter version
-git declutter scan
 ```
 
----
+Windows: unzip `git-declutter_*_windows_amd64.zip` and add `git-declutter.exe` to `PATH`.
+
+Homebrew will be the long-term primary install (`brew install git-declutter`). It is not available yet.
+
+Until a `v*` tag has been pushed, Releases will be empty and `go install` is the only path.
 
 ## Example
 
@@ -95,15 +102,13 @@ PROTECTED                                         3
 12 safe · 3 review · 4 keep · 3 protected
 ```
 
----
-
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `git declutter scan` | Analyze local branches. Never deletes anything. |
 | `git declutter why <branch>` | Explain one branch's classification. |
-| `git declutter clean` | Interactively remove SAFE branches with recovery enabled. |
+| `git declutter clean` | Interactively remove SAFE branches (recoverable). |
 | `git declutter clean --dry-run` | Preview cleanup with no changes. |
 | `git declutter clean --safe-only --yes` | Non-interactive SAFE cleanup. |
 | `git declutter clean --permanent` | Delete without GitDeclutter recovery refs. |
@@ -499,6 +504,26 @@ Build locally:
 
 ```bash
 make build
+make dist        # cross-compile into ./dist (needs Go)
+```
+
+### Cut a GitHub Release
+
+Pushing a version tag publishes macOS, Linux, and Windows binaries via GoReleaser (see `.github/workflows/release.yml`).
+
+```bash
+git checkout main
+git pull
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+`git declutter version` in those binaries reports the tag (for example `0.1.0`). Local `make build` without a tag reports `0.1.0-dev`.
+
+Dry-run without publishing (needs [GoReleaser](https://goreleaser.com)):
+
+```bash
+make snapshot
 ```
 
 ---
